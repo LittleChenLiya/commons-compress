@@ -42,7 +42,9 @@ The <action> type attribute can be add,update,fix,remove.
     <title>Apache Commons Compress Release Notes</title>
   </properties>
   <body>
-    <release version="1.29.0" date="YYYY-MM-DD" description="This is a feature and maintenance release. Java 8 or later is required. This release updates Apache Commons Lang to 3.18.0 to pick up the fix for CVE-2025-48924 (https://nvd.nist.gov/vuln/detail/CVE-2025-48924), but is not affected by it.">
+  <release version="1.29.0" date="YYYY-MM-DD" description="This is a feature and maintenance release. Java 8 or later is required. This release updates Apache Commons Lang to 3.18.0 to pick up the fix for CVE-2025-48924 (https://nvd.nist.gov/vuln/detail/CVE-2025-48924), but is not affected by it.">
+      <!-- ADD -->
+      <action type="add" dev="apache">[All] Add ArchiveDestinationChecker to validate where archive entries would land in a target directory from an in-memory manifest, without accessing the file system. The checker reports traversal escapes, absolute names, reserved Windows names, duplicate entries (including duplicate directories), file/directory name clashes, case collisions, parent paths occupied by files, and unsafe symbolic link targets under POSIX or Windows rules.</action>
       <!-- FIX sevenz -->      
       <action type="fix" issue="COMPRESS-702" dev="ggregory" due-to="Zhang Di, Lastoneee">[7-Zip] Performance issue in SevenZFile #681.</action>
       <action type="fix" dev="ggregory" due-to="Gary Gregory">[7-Zip] Fix kilobyte to kibibyte conversion in SevenZFile.ArchiveStatistics.assertValidity(int).</action>
