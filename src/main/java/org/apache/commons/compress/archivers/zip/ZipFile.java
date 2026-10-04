@@ -35,6 +35,7 @@ import java.nio.file.Files;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
@@ -664,7 +665,7 @@ public class ZipFile implements ArchiveFile<ZipArchiveEntry> {
     /**
      * List of entries in the order they appear inside the central directory.
      */
-    private final List<ZipArchiveEntry> entries = new LinkedList<>();
+    private final List<ZipArchiveEntry> entries = new ArrayList<>();
 
     /**
      * Maps String to list of ZipArchiveEntrys, name -> actual entries.
@@ -1192,6 +1193,27 @@ public class ZipFile implements ArchiveFile<ZipArchiveEntry> {
     }
 
     /**
+     * Gets the entry at the given position inside the archive's central directory.
+     * <p>
+     * The central directory index is the identity of an entry: unlike {@link #getEntry(String)} it never hides duplicate names, so it can be used to read a
+     * specific entry even when several entries share the same name. The index is zero-based and reflects the order of entries inside the central directory.
+     * </p>
+     *
+     * @param centralDirectoryIndex the zero-based position of the entry inside the central directory.
+     * @return The ZipArchiveEntry at the given position.
+     * @throws IndexOutOfBoundsException if the index is negative or greater than or equal to the number of entries.
+     * @see ZipEntryConflictIndex
+     * @since 1.29.0
+     */
+    public ZipArchiveEntry getEntry(final int centralDirectoryIndex) {
+        if (centralDirectoryIndex < 0 || centralDirectoryIndex >= entries.size()) {
+            throw new IndexOutOfBoundsException(
+                    "centralDirectoryIndex " + centralDirectoryIndex + " is out of bounds for " + entries.size() + " entries");
+        }
+        return entries.get(centralDirectoryIndex);
+    }
+
+    /**
      * Gets the offset of the first local file header in the file.
      *
      * @return The length of the content before the first local file header.
@@ -1273,6 +1295,25 @@ public class ZipFile implements ArchiveFile<ZipArchiveEntry> {
         default:
             throw new UnsupportedZipFeatureException(ZipMethod.getMethodByCode(entry.getMethod()), entry);
         }
+    }
+
+    /**
+     * Gets an InputStream for reading the contents of the entry at the given position inside the archive's central directory.
+     * <p>
+     * This is the identity-based read entry point: it opens the entry identified by its central directory index, so it can read a specific entry even when
+     * several entries share the same name. The returned stream implements {@link InputStreamStatistics}.
+     * </p>
+     *
+     * @param centralDirectoryIndex the zero-based position of the entry inside the central directory.
+     * @return A stream to read the entry from.
+     * @throws IOException if unable to create an input stream from the entry.
+     * @throws IndexOutOfBoundsException if the index is negative or greater than or equal to the number of entries.
+     * @see #getEntry(int)
+     * @see ZipEntryConflictIndex
+     * @since 1.29.0
+     */
+    public InputStream getInputStream(final int centralDirectoryIndex) throws IOException {
+        return getInputStream(getEntry(centralDirectoryIndex));
     }
 
     /**
