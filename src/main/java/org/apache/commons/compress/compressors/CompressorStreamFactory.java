@@ -194,7 +194,12 @@ public class CompressorStreamFactory implements CompressorStreamProvider {
     private static final String YOU_NEED_XZ_JAVA = youNeed("XZ for Java", "https://tukaani.org/xz/java.html");
     private static final String YOU_NEED_ZSTD_JNI = youNeed("Zstd JNI", "https://github.com/luben/zstd-jni");
 
-    private static final Set<String> ALL_NAMES = Sets.newHashSet(BZIP2, GZIP, PACK200, SNAPPY_FRAMED, Z, DEFLATE, XZ, LZMA, LZ4_FRAMED, ZSTANDARD);
+    static final Set<String> ALL_NAMES = Sets.newHashSet(BZIP2, GZIP, PACK200, SNAPPY_FRAMED, Z, DEFLATE, XZ, LZMA, LZ4_FRAMED, ZSTANDARD);
+
+    /**
+     * Maximum number of signature bytes read to detect a compressor stream type.
+     */
+    static final int SIGNATURE_LENGTH = 12;
 
     private static Iterable<CompressorStreamProvider> archiveStreamProviderIterable() {
         return ServiceLoader.load(CompressorStreamProvider.class, ClassLoader.getSystemClassLoader());
@@ -232,7 +237,7 @@ public class CompressorStreamFactory implements CompressorStreamProvider {
         if (!inputStream.markSupported()) {
             throw new IllegalArgumentException("Mark is not supported.");
         }
-        final byte[] signature = new byte[12];
+        final byte[] signature = new byte[SIGNATURE_LENGTH];
         inputStream.mark(signature.length);
         int signatureLength = -1;
         try {
@@ -241,6 +246,19 @@ public class CompressorStreamFactory implements CompressorStreamProvider {
         } catch (final IOException e) {
             throw new CompressorException("Failed to read signature.", e);
         }
+        return detect(signature, signatureLength, compressorNames);
+    }
+
+    /**
+     * Detects the type of compressor stream from an already captured signature, without reading from or requiring marks on any stream.
+     *
+     * @param signature       the captured prefix bytes.
+     * @param signatureLength the number of valid bytes in {@code signature}.
+     * @param compressorNames compressor names to limit autodetection.
+     * @return type of compressor stream detected.
+     * @throws CompressorException if no compressor stream type was detected.
+     */
+    static String detect(final byte[] signature, final int signatureLength, final Set<String> compressorNames) throws CompressorException {
         if (compressorNames.contains(BZIP2) && BZip2CompressorInputStream.matches(signature, signatureLength)) {
             return BZIP2;
         }
