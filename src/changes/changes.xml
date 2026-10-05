@@ -240,6 +240,10 @@ The <action> type attribute can be add,update,fix,remove.
       <action type="add" dev="ggregory" due-to="Gary Gregory">Add and use ArchiveException.requireNonNull(T, String).</action>
       <action type="add" dev="ggregory" due-to="Gary Gregory">Add and use CompressException.requireNonNull(Class, T, String).</action>
       <action type="add" dev="ggregory" due-to="Gary Gregory">Add and use CpioArchiveEntry.setTimeMillis(long).</action>
+      <action type="add" due-to="Claude Code">[Zip] Add ZipNameNormalization to describe explicit slash and case folding rules for entry name comparison.</action>
+      <action type="add" due-to="Claude Code">[Zip] Add ZipEntryId, the immutable identity of a central directory entry based on its zero-based central directory position, name and directory flag.</action>
+      <action type="add" due-to="Claude Code">[Zip] Add ZipNameCollision and ZipFile.getNameConflictIndex(...) to report both raw duplicate names and normalized name conflicts without treating the first same-named entry as the only answer; the index is built from central directory metadata only and does not decompress entry content.</action>
+      <action type="add" due-to="Claude Code">[Zip] Add ZipFile.getEntry(ZipEntryId), ZipFile.getInputStream(ZipEntryId) and ZipFile.getRawInputStream(ZipEntryId) to read entries by identity; the legacy name based APIs keep their existing behavior.</action>
       <!-- UPDATE -->
       <action type="update" dev="ggregory" due-to="Gary Gregory">Bump org.apache.commons:commons-parent from 85 to 105 #707, #752.</action>
       <action type="update" dev="ggregory" due-to="Gary Gregory">Bump org.apache.commons:commons-lang3 from 3.18.0 to 3.20.0.</action>

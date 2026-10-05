@@ -44,6 +44,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.zip.Inflater;
@@ -672,6 +673,14 @@ public class ZipFile implements ArchiveFile<ZipArchiveEntry> {
     private final Map<String, LinkedList<ZipArchiveEntry>> nameMap = new HashMap<>(HASH_SIZE);
 
     /**
+     * Lazily created explicit conflict indexes, keyed by the caller-supplied name normalization rules.
+     * <p>
+     * The indexes are built from the already parsed central directory entries only; they never force entry content to be decompressed.
+     * </p>
+     */
+    private final Map<ZipNameNormalization, ZipNameConflictIndex> conflictIndexes = new ConcurrentHashMap<>();
+
+    /**
      * The encoding to use for file names and the file comment.
      * <p>
      * For a list of possible values see <a href="Supported Encodings">https://docs.oracle.com/javase/8/docs/technotes/guides/intl/encoding.doc.html</a>.
@@ -1081,6 +1090,19 @@ public class ZipFile implements ArchiveFile<ZipArchiveEntry> {
     }
 
     /**
+     * Gets the entry at the given zero-based central directory position.
+     */
+    private ZipArchiveEntry entryAt(final int centralDirectoryIndex) {
+        int i = 0;
+        for (final ZipArchiveEntry e : entries) {
+            if (i++ == centralDirectoryIndex) {
+                return e;
+            }
+        }
+        throw new IndexOutOfBoundsException(Integer.toString(centralDirectoryIndex));
+    }
+
+    /**
      * Ensures that the close method of this ZIP file is called when there are no more references to it.
      *
      * @see #close()
@@ -1192,6 +1214,70 @@ public class ZipFile implements ArchiveFile<ZipArchiveEntry> {
     }
 
     /**
+     * Gets the central directory entry with the given identity.
+     * <p>
+     * Unlike {@link #getEntry(String)} this method resolves duplicate names unambiguously: the {@link ZipEntryId} carries the entry's zero-based central
+     * directory position, so every one of several same-named entries can be addressed individually.
+     * </p>
+     *
+     * @param id the entry identity, as returned by {@link #getNameConflictIndex()} (or constructed for a known central directory position).
+     * @return The ZipArchiveEntry corresponding to the given identity.
+     * @throws NullPointerException     if {@code id} is {@code null}.
+     * @throws IllegalArgumentException if the identity's central directory position is outside of this archive's range or its name/directory flag do not match
+     *                                  the entry found at that position (for example because the identity belongs to a different archive).
+     * @since 1.29.0
+     */
+    public ZipArchiveEntry getEntry(final ZipEntryId id) {
+        Objects.requireNonNull(id, "id");
+        final int index = id.getCentralDirectoryIndex();
+        if (index < 0 || index >= entries.size()) {
+            throw new IllegalArgumentException("Central directory index " + index + " is out of range [0," + entries.size() + ")");
+        }
+        final ZipArchiveEntry entry = entryAt(index);
+        if (!Objects.equals(entry.getName(), id.getName()) || entry.isDirectory() != id.isDirectory()) {
+            throw new IllegalArgumentException("ZipEntryId " + id + " does not match the entry at central directory position " + index + " of this archive: '"
+                    + entry.getName() + "'");
+        }
+        return entry;
+    }
+
+    /**
+     * Gets an explicit index of the name conflicts in this archive's central directory.
+     * <p>
+     * The returned index reports both raw duplicate names and collisions after applying {@link ZipNameNormalization#WINDOWS_LIKE} (backslashes treated as
+     * separators, names compared case-insensitively). Use {@link #getNameConflictIndex(ZipNameNormalization)} to state your own slash/case rules.
+     * </p>
+     * <p>
+     * Building the index walks central directory metadata only; it does not decompress entry content, and it works for archives opened with
+     * {@link Builder#setIgnoreLocalFileHeader(boolean)}.
+     * </p>
+     *
+     * @return the lazily created, cached conflict index for this archive.
+     * @since 1.29.0
+     */
+    public ZipNameConflictIndex getNameConflictIndex() {
+        return getNameConflictIndex(ZipNameNormalization.WINDOWS_LIKE);
+    }
+
+    /**
+     * Gets an explicit index of the name conflicts in this archive's central directory using the given normalization rules.
+     * <p>
+     * Raw (exact-name) conflicts are always reported; additionally entries whose names become equal after applying {@code normalization} are grouped
+     * together. The trailing directory separator is preserved by the normalization, so a file and a directory with the same base name remain
+     * distinguishable.
+     * </p>
+     *
+     * @param normalization the slash and case rules to use for normalized conflict reporting.
+     * @return the lazily created, cached conflict index for the given rules.
+     * @throws NullPointerException if {@code normalization} is {@code null}.
+     * @since 1.29.0
+     */
+    public ZipNameConflictIndex getNameConflictIndex(final ZipNameNormalization normalization) {
+        Objects.requireNonNull(normalization, "normalization");
+        return conflictIndexes.computeIfAbsent(normalization, n -> ZipNameConflictIndex.create(entries, n));
+    }
+
+    /**
      * Gets the offset of the first local file header in the file.
      *
      * @return The length of the content before the first local file header.
@@ -1299,6 +1385,36 @@ public class ZipFile implements ArchiveFile<ZipArchiveEntry> {
             return null;
         }
         return createBoundedInputStream(start, entry.getCompressedSize());
+    }
+
+    /**
+     * Gets the raw stream of the archive entry (compressed form) identified by the given identity.
+     *
+     * @param id the entry identity from {@link #getNameConflictIndex()}.
+     * @return The raw input stream containing (possibly) compressed data.
+     * @throws IOException              if there is a problem reading data offset.
+     * @throws IllegalArgumentException if the identity does not belong to this archive (see {@link #getEntry(ZipEntryId)}).
+     * @since 1.29.0
+     */
+    public InputStream getRawInputStream(final ZipEntryId id) throws IOException {
+        return getRawInputStream(getEntry(id));
+    }
+
+    /**
+     * Gets an InputStream for reading the contents of the entry with the given identity.
+     * <p>
+     * This is the unambiguous counterpart of {@link #getInputStream(ZipArchiveEntry)}: when several entries share a name (or differ only in case or slash
+     * style), each of them can still be read individually by passing its {@link ZipEntryId} from {@link #getNameConflictIndex()}.
+     * </p>
+     *
+     * @param id the entry identity from {@link #getNameConflictIndex()}.
+     * @return A stream to read the entry from. The returned stream implements {@link InputStreamStatistics}.
+     * @throws IOException              if unable to create an input stream from the entry.
+     * @throws IllegalArgumentException if the identity does not belong to this archive (see {@link #getEntry(ZipEntryId)}).
+     * @since 1.29.0
+     */
+    public InputStream getInputStream(final ZipEntryId id) throws IOException {
+        return getInputStream(getEntry(id));
     }
 
     /**
