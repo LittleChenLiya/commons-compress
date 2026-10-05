@@ -25,10 +25,14 @@ import java.io.InputStream;
 import java.io.SequenceInputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.SeekableByteChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -178,6 +182,10 @@ public class TarFile implements ArchiveFile<TarArchiveEntry> {
     private final int maxEntryNameLength;
 
     private final long maxPaxHeaderSize;
+
+    private volatile String archiveDigest;
+
+    private volatile TarHardLinkIndex hardLinkIndex;
 
     private TarFile(final Builder builder) throws IOException {
         this.archive = builder.getChannel(SeekableByteChannel.class);
@@ -416,6 +424,101 @@ public class TarFile implements ArchiveFile<TarArchiveEntry> {
     @Deprecated
     public List<TarArchiveEntry> getEntries() {
         return new ArrayList<>(entries);
+    }
+
+    /**
+     * Computes the digest that identifies this archive's current structure: the archive size plus the name, size, data
+     * offset, link flag, link name, modification time and mode of every entry.
+     *
+     * @return the lower-case hexadecimal SHA-256 digest.
+     * @throws IOException if the archive size cannot be determined.
+     */
+    private String computeArchiveDigest() throws IOException {
+        final MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (final NoSuchAlgorithmException e) {
+            throw new ArchiveException("SHA-256 message digest is not available", e);
+        }
+        updateLong(digest, archive.size());
+        for (final TarArchiveEntry entry : entries) {
+            updateString(digest, entry.getName());
+            updateLong(digest, entry.getSize());
+            updateLong(digest, entry.getDataOffset());
+            digest.update(entry.getLinkFlag());
+            updateString(digest, entry.getLinkName());
+            final Date modTime = entry.getModTime();
+            updateLong(digest, modTime != null ? modTime.getTime() : -1L);
+            updateLong(digest, entry.getMode());
+        }
+        final byte[] hash = digest.digest();
+        final StringBuilder hex = new StringBuilder(hash.length * 2);
+        for (final byte b : hash) {
+            hex.append(Character.forDigit(b >> 4 & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+        }
+        return hex.toString();
+    }
+
+    /**
+     * Gets a digest bound to this archive's current structure. The digest covers the archive size and the metadata
+     * (name, size, data offset, link flag, link name, modification time and mode) of every entry; it changes when the
+     * archive is replaced by a different one. {@link TarHardLinkIndex} uses it to refuse serving a stale index after
+     * the archive has been swapped out.
+     *
+     * @return the lower-case hexadecimal SHA-256 digest of this archive's structure.
+     * @throws IOException if the digest cannot be computed.
+     * @since 1.29.0
+     */
+    public String getArchiveDigest() throws IOException {
+        String result = archiveDigest;
+        if (result == null) {
+            synchronized (this) {
+                result = archiveDigest;
+                if (result == null) {
+                    result = archiveDigest = computeArchiveDigest();
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Gets the hard link content index of this archive, building it on first call. The index resolves every hard link
+     * entry to the final content-bearing entry it refers to, using entry metadata only; nothing is extracted to the
+     * file system and normal reading through this class is unchanged. The returned index is bound to this archive's
+     * {@link #getArchiveDigest() digest}.
+     *
+     * @return the hard link index of this archive.
+     * @throws IOException if the index cannot be built.
+     * @since 1.29.0
+     */
+    public TarHardLinkIndex getHardLinkIndex() throws IOException {
+        TarHardLinkIndex result = hardLinkIndex;
+        if (result == null) {
+            synchronized (this) {
+                result = hardLinkIndex;
+                if (result == null) {
+                    result = hardLinkIndex = TarHardLinkIndex.build(this);
+                }
+            }
+        }
+        return result;
+    }
+
+    private void updateLong(final MessageDigest digest, final long value) {
+        for (int i = 7; i >= 0; i--) {
+            digest.update((byte) (value >>> i * 8));
+        }
+    }
+
+    private void updateString(final MessageDigest digest, final String value) {
+        if (value == null) {
+            updateLong(digest, -1L);
+            return;
+        }
+        final byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        updateLong(digest, bytes.length);
+        digest.update(bytes);
     }
 
     /**
