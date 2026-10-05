@@ -42,6 +42,36 @@ space. In addition the tests will run for a long time (more than ten
 minutes, maybe even longer depending on your hardware) and heavily
 load the CPU at times.
 
+## Hard Link Index for TarFile
+
+`TarFile` can build a hard link index (`TarHardLinkIndex`) that resolves
+hard link entries (link flag `LF_LINK`) to the entries that actually
+provide their content. A link may point to an entry that appears later
+in the archive, and chains of links are followed to the final content
+entry. Link paths are resolved relative to the archive root.
+
+The index reports distinct errors for:
+
+* out-of-bounds link paths (absolute paths or `..` segments that escape
+  the archive root),
+* missing targets,
+* ambiguous targets (more than one entry with the resolved name),
+* cycles (for example `a` points to `b` and `b` points to `a`).
+
+The index is bound to a SHA-256 digest of the archive it was built
+from. If the archive is replaced after the index was built, using the
+old index with the changed archive is refused. Building the index only
+reads the raw archive bytes; it does not extract anything to the file
+system.
+
+To run only the targeted hard link test:
+
+    mvn test -Dtest=TarHardLinkTest
+
+To run the hard link test together with the existing TarFile test:
+
+    mvn test -Dtest=TarFileTest,TarHardLinkTest
+
 ## Building the Site
 
 The site build produces license release audit (aka RAT) reports as

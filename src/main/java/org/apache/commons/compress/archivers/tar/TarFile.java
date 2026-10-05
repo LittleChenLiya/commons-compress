@@ -27,7 +27,9 @@ import java.nio.ByteBuffer;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedList;
@@ -178,6 +180,16 @@ public class TarFile implements ArchiveFile<TarArchiveEntry> {
     private final int maxEntryNameLength;
 
     private final long maxPaxHeaderSize;
+
+    /**
+     * The cached hard link index, built lazily when a hard link entry is read.
+     */
+    private volatile TarHardLinkIndex hardLinkIndex;
+
+    /**
+     * The cached digest of the archive, computed lazily when the hard link index is built.
+     */
+    private byte[] archiveDigest;
 
     private TarFile(final Builder builder) throws IOException {
         this.archive = builder.getChannel(SeekableByteChannel.class);
@@ -433,11 +445,123 @@ public class TarFile implements ArchiveFile<TarArchiveEntry> {
                 final List<InputStream> streams = sparseInputStreams.get(entry.getName());
                 return new SequenceInputStream(streams != null ? Collections.enumeration(streams) : Collections.emptyEnumeration());
             }
+            // Hard link entries store no data of their own: resolve them to the entry that provides the content.
+            if (entry.isLink()) {
+                final TarHardLinkIndex index = getOrBuildHardLinkIndex();
+                final TarArchiveEntry contentEntry = index.getContentEntry(entry);
+                return new BoundedTarEntryInputStream(contentEntry.getDataOffset(), contentEntry.getSize(), archive);
+            }
             // Regular entries are bounded: wrap in BoundedTarEntryInputStream to enforce size and detect premature EOF
             return new BoundedTarEntryInputStream(entry.getDataOffset(), entry.getSize(), archive);
         } catch (final RuntimeException e) {
             throw new ArchiveException("Corrupted TAR archive. Can't read entry", (Throwable) e);
         }
+    }
+
+    /**
+     * Gets the input stream for the provided Tar Archive Entry using a previously built {@link TarHardLinkIndex}.
+     *
+     * <p>
+     * If the entry is a hard link, it is resolved through the index to the entry that provides the content. The index must have been built for this archive;
+     * if the archive has been replaced since the index was built, this method throws an {@link IOException} and refuses to read.
+     * </p>
+     *
+     * @param entry the entry to get the input stream from.
+     * @param index the hard link index to use.
+     * @return Input stream of the provided entry.
+     * @throws IOException Corrupted TAR archive. Can't read entry, or the index does not match the current archive.
+     * @since 1.29.0
+     */
+    public InputStream getInputStream(final TarArchiveEntry entry, final TarHardLinkIndex index) throws IOException {
+        Objects.requireNonNull(index, "index");
+        verifyIndexDigest(index);
+        try {
+            if (entry.isSparse()) {
+                final List<InputStream> streams = sparseInputStreams.get(entry.getName());
+                return new SequenceInputStream(streams != null ? Collections.enumeration(streams) : Collections.emptyEnumeration());
+            }
+            if (entry.isLink()) {
+                final TarArchiveEntry contentEntry = index.getContentEntry(entry);
+                return new BoundedTarEntryInputStream(contentEntry.getDataOffset(), contentEntry.getSize(), archive);
+            }
+            return new BoundedTarEntryInputStream(entry.getDataOffset(), entry.getSize(), archive);
+        } catch (final RuntimeException e) {
+            throw new ArchiveException("Corrupted TAR archive. Can't read entry", (Throwable) e);
+        }
+    }
+
+    /**
+     * Builds a {@link TarHardLinkIndex} for this archive.
+     *
+     * <p>
+     * The index resolves every hard link entry to the entry that provides the content, following chains of hard links and recording the full reference chain.
+     * Link paths are resolved relative to the archive root. Building the index reads the raw archive bytes to compute the archive digest; it does not extract
+     * anything to the file system.
+     * </p>
+     *
+     * @return the hard link index.
+     * @throws IOException              if reading the archive fails.
+     * @throws TarHardLinkException     if a hard link is out of bounds, points to a missing or ambiguous target, or forms a cycle.
+     * @since 1.29.0
+     */
+    public TarHardLinkIndex buildHardLinkIndex() throws IOException {
+        return TarHardLinkIndex.build(this);
+    }
+
+    private TarHardLinkIndex getOrBuildHardLinkIndex() throws IOException {
+        TarHardLinkIndex result = hardLinkIndex;
+        if (result == null) {
+            result = buildHardLinkIndex();
+            hardLinkIndex = result;
+        }
+        return result;
+    }
+
+    private void verifyIndexDigest(final TarHardLinkIndex index) throws IOException {
+        final byte[] currentDigest = getArchiveDigest();
+        if (!Arrays.equals(currentDigest, index.getArchiveDigest())) {
+            throw new ArchiveException("The provided hard link index was built for a different archive and cannot be used with this archive");
+        }
+    }
+
+    /**
+     * Gets the digest of the archive, computing it lazily if necessary.
+     *
+     * @return a copy of the archive digest.
+     * @throws IOException if reading the archive fails.
+     */
+    byte[] getArchiveDigest() throws IOException {
+        if (archiveDigest == null) {
+            final MessageDigest digest;
+            try {
+                digest = MessageDigest.getInstance(getDigestAlgorithm());
+            } catch (final Exception e) {
+                throw new ArchiveException("Failed to compute archive digest", e);
+            }
+            final long savedPosition = archive.position();
+            try {
+                archive.position(0);
+                final ByteBuffer buffer = ByteBuffer.allocate(8192);
+                while (archive.read(buffer) != -1) {
+                    buffer.flip();
+                    digest.update(buffer);
+                    buffer.clear();
+                }
+                archiveDigest = digest.digest();
+            } finally {
+                archive.position(savedPosition);
+            }
+        }
+        return archiveDigest.clone();
+    }
+
+    /**
+     * Gets the algorithm used to compute the archive digest.
+     *
+     * @return the digest algorithm.
+     */
+    static String getDigestAlgorithm() {
+        return "SHA-256";
     }
 
     /**
