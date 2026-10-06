@@ -1302,6 +1302,42 @@ public class ZipFile implements ArchiveFile<ZipArchiveEntry> {
     }
 
     /**
+     * Runs a structural preflight check over this archive using the default options (no content validation).
+     * <p>
+     * The check cross-checks the central directory against the local file headers, computes the real compressed data region of every entry and
+     * looks for overlapping entry data, entries reaching into the central directory region, truncation and ZIP64 length overflows. Nothing is
+     * written, no entry is extracted and the position of the underlying channel is restored before this method returns.
+     * </p>
+     *
+     * @return the preflight report, never {@code null}.
+     * @throws IOException if reading the archive fails.
+     * @see ZipPreflight
+     * @since 1.29.0
+     */
+    public ZipPreflightReport preflight() throws IOException {
+        return preflight(ZipPreflightOptions.defaultOptions());
+    }
+
+    /**
+     * Runs a preflight check over this archive.
+     * <p>
+     * The check cross-checks the central directory against the local file headers, computes the real compressed data region of every entry and
+     * looks for overlapping entry data, entries reaching into the central directory region, truncation and ZIP64 length overflows. Use
+     * {@link ZipPreflightOptions} to enable the optional content validation phase with per-entry and global uncompressed byte budgets. Nothing
+     * is written, no entry is extracted and the position of the underlying channel is restored before this method returns.
+     * </p>
+     *
+     * @param options the check options.
+     * @return the preflight report, never {@code null}.
+     * @throws IOException if reading the archive fails.
+     * @see ZipPreflight
+     * @since 1.29.0
+     */
+    public ZipPreflightReport preflight(final ZipPreflightOptions options) throws IOException {
+        return ZipPreflight.check(archive, options);
+    }
+
+    /**
      * Gets the entry's content as a String if isUnixSymlink() returns true for it, otherwise returns null.
      * <p>
      * This method assumes the symbolic link's file name uses the same encoding that as been specified for this ZipFile.

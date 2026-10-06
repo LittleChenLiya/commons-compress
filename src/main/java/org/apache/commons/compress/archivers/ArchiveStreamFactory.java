@@ -21,6 +21,7 @@ package org.apache.commons.compress.archivers;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.channels.SeekableByteChannel;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.util.Collections;
@@ -44,6 +45,9 @@ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream;
 import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
+import org.apache.commons.compress.archivers.zip.ZipPreflight;
+import org.apache.commons.compress.archivers.zip.ZipPreflightOptions;
+import org.apache.commons.compress.archivers.zip.ZipPreflightReport;
 import org.apache.commons.compress.utils.Sets;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -617,6 +621,46 @@ public class ArchiveStreamFactory implements ArchiveStreamProvider {
     @Override
     public Set<String> getOutputStreamArchiveNames() {
         return Sets.newHashSet(AR, ZIP, TAR, JAR, CPIO, SEVEN_Z);
+    }
+
+    /**
+     * Runs a structural preflight check over the ZIP archive read from the given channel using the default options (no content validation).
+     * <p>
+     * The check cross-checks the central directory against the local file headers, computes the real compressed data region of every entry and
+     * looks for overlapping entry data, entries reaching into the central directory region, truncation and ZIP64 length overflows before the
+     * archive is extracted or copied. Nothing is written, no entry is extracted, no external tool is invoked and the position of the channel is
+     * restored before this method returns.
+     * </p>
+     *
+     * @param channel the channel to read the ZIP archive from, must be open for reading.
+     * @return the preflight report, never {@code null}.
+     * @throws IOException if reading the archive fails.
+     * @see ZipPreflight
+     * @since 1.29.0
+     */
+    public ZipPreflightReport preflightZipArchive(final SeekableByteChannel channel) throws IOException {
+        return preflightZipArchive(channel, ZipPreflightOptions.defaultOptions());
+    }
+
+    /**
+     * Runs a preflight check over the ZIP archive read from the given channel.
+     * <p>
+     * The check cross-checks the central directory against the local file headers, computes the real compressed data region of every entry and
+     * looks for overlapping entry data, entries reaching into the central directory region, truncation and ZIP64 length overflows before the
+     * archive is extracted or copied. Use {@link ZipPreflightOptions} to enable the optional content validation phase with per-entry and global
+     * uncompressed byte budgets. Nothing is written, no entry is extracted, no external tool is invoked and the position of the channel is
+     * restored before this method returns.
+     * </p>
+     *
+     * @param channel the channel to read the ZIP archive from, must be open for reading.
+     * @param options the check options.
+     * @return the preflight report, never {@code null}.
+     * @throws IOException if reading the archive fails.
+     * @see ZipPreflight
+     * @since 1.29.0
+     */
+    public ZipPreflightReport preflightZipArchive(final SeekableByteChannel channel, final ZipPreflightOptions options) throws IOException {
+        return ZipPreflight.check(channel, options);
     }
 
     /**
