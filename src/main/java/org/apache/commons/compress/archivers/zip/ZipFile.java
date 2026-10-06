@@ -1011,6 +1011,20 @@ public class ZipFile implements ArchiveFile<ZipArchiveEntry> {
     }
 
     /**
+     * Performs a read-only structural pre-flight check of this archive before entries are extracted or copied: the central directory and all local file
+     * headers are cross-checked, the real compressed-data range of every entry is computed and checked for overlaps, truncation and ZIP64 length
+     * overflows. No entry data is written out and the position of the underlying channel is restored before this method returns.
+     *
+     * @return a report with one issue per finding, never null.
+     * @throws IOException if the archive cannot be read.
+     * @see ZipArchivePrecheck
+     * @since 1.29.0
+     */
+    public ZipPrecheckReport precheck() throws IOException {
+        return ZipArchivePrecheck.check(archive);
+    }
+
+    /**
      * Closes the archive.
      *
      * @throws IOException if an error occurs closing the archive.

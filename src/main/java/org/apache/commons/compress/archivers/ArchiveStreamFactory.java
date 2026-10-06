@@ -21,6 +21,7 @@ package org.apache.commons.compress.archivers;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.file.Path;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.util.Collections;
@@ -44,6 +45,8 @@ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream;
 import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
+import org.apache.commons.compress.archivers.zip.ZipArchivePrecheck;
+import org.apache.commons.compress.archivers.zip.ZipPrecheckReport;
 import org.apache.commons.compress.utils.Sets;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -617,6 +620,21 @@ public class ArchiveStreamFactory implements ArchiveStreamProvider {
     @Override
     public Set<String> getOutputStreamArchiveNames() {
         return Sets.newHashSet(AR, ZIP, TAR, JAR, CPIO, SEVEN_Z);
+    }
+
+    /**
+     * Performs a read-only structural pre-flight check of the ZIP archive at the given path before it is extracted or copied. The check cross-verifies
+     * the central directory against the local file headers, computes the real compressed-data range of every entry and reports overlaps, truncation,
+     * forged lengths and ZIP64 length overflows as per-entry diagnostics. No entries are written out.
+     *
+     * @param path the path of the ZIP archive to check.
+     * @return the precheck report, never null.
+     * @throws IOException if the archive cannot be read.
+     * @see ZipArchivePrecheck
+     * @since 1.29.0
+     */
+    public ZipPrecheckReport precheckZipArchive(final Path path) throws IOException {
+        return ZipArchivePrecheck.check(path);
     }
 
     /**
